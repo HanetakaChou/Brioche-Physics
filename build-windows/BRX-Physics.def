@@ -1,0 +1,17 @@
+EXPORTS
+	brx_physics_create_context
+	brx_physics_destroy_context
+	brx_physics_create_world
+	brx_physics_destroy_world
+	brx_physics_world_add_rigid_body
+	brx_physics_world_remove_rigid_body
+	brx_physics_world_add_constraint
+	brx_physics_world_remove_constraint
+	brx_physics_world_step
+	brx_physics_create_rigid_body
+	brx_physics_destroy_rigid_body
+	brx_physics_rigid_body_apply_key_frame
+	brx_physics_rigid_body_set_transform
+	brx_physics_rigid_body_get_transform
+	brx_physics_create_constraint
+	brx_physics_destroy_constraint

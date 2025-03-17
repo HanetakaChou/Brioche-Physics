@@ -1,0 +1,38 @@
+/*
+ * Copyright (C) YuqiaoZhang(HanetakaChou)
+ * 
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Lesser General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ * 
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ * 
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+{
+    global:
+        brx_physics_create_context;
+        brx_physics_destroy_context;
+        brx_physics_create_world;
+        brx_physics_destroy_world;
+        brx_physics_world_add_rigid_body;
+        brx_physics_world_remove_rigid_body;
+        brx_physics_world_add_constraint;
+        brx_physics_world_remove_constraint;
+        brx_physics_world_step;
+        brx_physics_create_rigid_body;
+        brx_physics_destroy_rigid_body;
+        brx_physics_rigid_body_apply_key_frame;
+        brx_physics_rigid_body_set_transform;
+        brx_physics_rigid_body_get_transform;
+        brx_physics_create_constraint;
+        brx_physics_destroy_constraint;
+    local:
+        *;
+};

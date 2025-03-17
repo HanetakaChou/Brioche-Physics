@@ -1,0 +1,4 @@
+[submodule "thirdparty/BulletPhysics"]
+	path = thirdparty/BulletPhysics
+	url = git@github.com:HanetakaChou/BulletPhysics.git
+	branch = master

@@ -1,0 +1,21 @@
+## Brioche Physics
+
+- [x] Backend  
+    - [x] [Bullet Physics](https://github.com/HanetakaChou/BulletPhysics)  
+    - [ ] [Jolt Physics](https://github.com/HanetakaChou/JoltPhysics)  
+- [x] Rigid Body  
+    - [x] Shape
+        - [x] Sphere  
+        - [x] Box  
+        - [x] Capsule  
+    - [x] Motion  
+        - [x] Fixed  
+        - [x] Keyframe  
+        - [x] Dynamic  
+- [ ] Constraint 
+  - [x] Fixed    
+  - [x] Ball and Socket  
+  - [x] Hinge
+  - [x] Prismatic  
+  - [x] Ragdoll  
+  - [ ] ~~6 DOF~~  

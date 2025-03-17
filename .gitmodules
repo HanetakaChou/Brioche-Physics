@@ -1,0 +1,16 @@
+[submodule "thirdparty/Brioche-Physics"]
+	path = thirdparty/Brioche-Physics
+	url = git@github.com:HanetakaChou/Brioche-Physics.git
+	branch = master
+[submodule "thirdparty/JoltPhysics"]
+	path = thirdparty/JoltPhysics
+	url = git@github.com:HanetakaChou/JoltPhysics.git
+	branch = master
+[submodule "thirdparty/BulletPhysics"]
+	path = thirdparty/BulletPhysics
+	url = git@github.com:HanetakaChou/BulletPhysics.git
+	branch = master
+[submodule "thirdparty/McRT-Malloc"]
+	path = thirdparty/McRT-Malloc
+	url = git@github.com:HanetakaChou/McRT-Malloc.git
+	branch = master

@@ -57,7 +57,7 @@ LOCAL_C_INCLUDES :=
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/../thirdparty/BulletPhysics/src
 
 LOCAL_CPPFLAGS := 
-LOCAL_CPPFLAGS += -std=c++17
+LOCAL_CPPFLAGS += -std=c++20
 
 LOCAL_LDFLAGS :=
 LOCAL_LDFLAGS += -Wl,--enable-new-dtags

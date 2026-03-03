@@ -534,9 +534,17 @@ inline brx_physics_constraint::~brx_physics_constraint()
 	btAssert(NULL == this->m_constraint);
 }
 
-inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRigidBody *rigid_body_a, btRigidBody *rigid_body_b, BRX_PHYSICS_CONSTRAINT_TYPE wrapped_constraint_type, float const wrapped_pivot[3], float const wrapped_twist_axis[3], float const wrapped_plane_axis[3], float const wrapped_normal_axis[3], float const wrapped_twist_limit[2], float const wrapped_plane_limit[2], float const wrapped_normal_limit[2])
+inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRigidBody *rigid_body_reference, btRigidBody *rigid_body_attached, BRX_PHYSICS_CONSTRAINT_TYPE wrapped_constraint_type, float const wrapped_pivot[3], float const wrapped_twist_axis[3], float const wrapped_plane_axis[3], float const wrapped_normal_axis[3], float const wrapped_twist_limit[2], float const wrapped_plane_limit[2], float const wrapped_normal_limit[2])
 {
 	// https://help.autodesk.com/view/MAYAUL/2024/ENU/?guid=GUID-CDB3638D-23AF-49EF-8EF6-53081EE4D39D
+
+	// convention
+	//
+	// pivot: child bone (head) position
+	//
+	// rigid body reference: mapped to parent bone, centered at the midpoint of parent bone (head) position and child bone (head) position
+	//
+	// rigid body attached: mapped to child bone, centered at the midpoint of child bone (head) position and "child of child" bone (head) position
 
 	constexpr btScalar const epsilon = 1E-6F;
 
@@ -548,14 +556,14 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 					wrapped_twist_axis[2], wrapped_plane_axis[2], wrapped_normal_axis[2]),
 		btVector3(wrapped_pivot[0], wrapped_pivot[1], wrapped_pivot[2]));
 
-	btTransform rigid_body_a_world_transform;
-	rigid_body_a->getMotionState()->getWorldTransform(rigid_body_a_world_transform);
+	btTransform rigid_body_reference_world_transform;
+	rigid_body_reference->getMotionState()->getWorldTransform(rigid_body_reference_world_transform);
 
-	btTransform rigid_body_b_world_transform;
-	rigid_body_b->getMotionState()->getWorldTransform(rigid_body_b_world_transform);
+	btTransform rigid_body_attached_world_transform;
+	rigid_body_attached->getMotionState()->getWorldTransform(rigid_body_attached_world_transform);
 
-	btTransform const frame_a = rigid_body_a_world_transform.inverse() * joint_world_transform;
-	btTransform const frame_b = rigid_body_b_world_transform.inverse() * joint_world_transform;
+	btTransform const frame_reference = rigid_body_reference_world_transform.inverse() * joint_world_transform;
+	btTransform const frame_attached = rigid_body_attached_world_transform.inverse() * joint_world_transform;
 
 	btAssert(NULL == this->m_constraint);
 	{
@@ -565,7 +573,7 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 		{
 			btAssert(BRX_PHYSICS_CONSTRAINT_FIXED == wrapped_constraint_type);
 
-			btFixedConstraint *constraint = new btFixedConstraint(*rigid_body_a, *rigid_body_b, frame_a, frame_b);
+			btFixedConstraint *constraint = new btFixedConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference);
 
 			btAssert(btFabs(wrapped_twist_limit[0]) < epsilon);
 			btAssert(btFabs(wrapped_twist_limit[1]) < epsilon);
@@ -581,7 +589,7 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 		{
 			btAssert(BRX_PHYSICS_CONSTRAINT_BALL_AND_SOCKET == wrapped_constraint_type);
 
-			btPoint2PointConstraint *constraint = new btPoint2PointConstraint(*rigid_body_a, *rigid_body_b, frame_a.getOrigin(), frame_b.getOrigin());
+			btPoint2PointConstraint *constraint = new btPoint2PointConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached.getOrigin(), frame_reference.getOrigin());
 
 			btAssert(btFabs(wrapped_twist_limit[0]) < epsilon);
 			btAssert(btFabs(wrapped_twist_limit[1]) < epsilon);
@@ -597,14 +605,14 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 		{
 			btAssert(BRX_PHYSICS_CONSTRAINT_HINGE == wrapped_constraint_type);
 
-			btHingeConstraint *constraint = new btHingeConstraint(*rigid_body_a, *rigid_body_b, frame_a, frame_b, true);
+			btHingeConstraint *constraint = new btHingeConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference, false);
 
 			btAssert(btFabs(wrapped_twist_limit[0]) < epsilon);
 			btAssert(btFabs(wrapped_twist_limit[1]) < epsilon);
 			btAssert(btFabs(wrapped_plane_limit[0]) < epsilon);
 			btAssert(btFabs(wrapped_plane_limit[1]) < epsilon);
 
-			btAssert(wrapped_normal_limit[0] < wrapped_normal_limit[1]);
+			btAssert(wrapped_normal_limit[0] <= wrapped_normal_limit[1]);
 			btAssert(wrapped_normal_limit[0] >= (SIMD_PI * -1.0F));
 			btAssert(wrapped_normal_limit[0] <= (SIMD_PI * 1.0F));
 			btAssert(wrapped_normal_limit[1] >= (SIMD_PI * -1.0F));
@@ -618,16 +626,18 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 		{
 			btAssert(BRX_PHYSICS_CONSTRAINT_PRISMATIC == wrapped_constraint_type);
 
-			btSliderConstraint *constraint = new btSliderConstraint(*rigid_body_a, *rigid_body_b, frame_a, frame_b, true);
+			btSliderConstraint *constraint = new btSliderConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference, false);
 
-			btAssert(btFabs(wrapped_twist_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_twist_limit[1]) < epsilon);
 			btAssert(btFabs(wrapped_plane_limit[0]) < epsilon);
 			btAssert(btFabs(wrapped_plane_limit[1]) < epsilon);
+			btAssert(btFabs(wrapped_normal_limit[0]) < epsilon);
+			btAssert(btFabs(wrapped_normal_limit[1]) < epsilon);
 
-			btAssert(wrapped_normal_limit[0] <= wrapped_normal_limit[1]);
-			constraint->setLowerLinLimit(btMin(wrapped_normal_limit[0], wrapped_normal_limit[1]));
-			constraint->setUpperLinLimit(btMax(wrapped_normal_limit[0], wrapped_normal_limit[1]));
+			btAssert(wrapped_twist_limit[0] <= wrapped_twist_limit[1]);
+			constraint->setLowerLinLimit(btMin(wrapped_twist_limit[0], wrapped_twist_limit[1]));
+			constraint->setUpperLinLimit(btMax(wrapped_twist_limit[0], wrapped_twist_limit[1]));
+			constraint->setLowerAngLimit(0.0F);
+			constraint->setUpperAngLimit(0.0F);
 
 			this->m_constraint = constraint;
 		}
@@ -662,7 +672,7 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 			btAssert(twist_span <= swing_span1);
 			btAssert(twist_span <= swing_span2);
 
-			btConeTwistConstraint *constraint = new btConeTwistConstraint(*rigid_body_a, *rigid_body_b, frame_a, frame_b);
+			btConeTwistConstraint *constraint = new btConeTwistConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference);
 			constraint->setLimit(swing_span1, swing_span2, twist_span);
 
 			this->m_constraint = constraint;

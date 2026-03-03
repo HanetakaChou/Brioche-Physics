@@ -101,7 +101,7 @@ extern "C" void brx_physics_rigid_body_get_transform(brx_physics_context *physic
 //
 // ragdoll (swing twist)
 
-extern "C" brx_physics_constraint *brx_physics_create_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_a, brx_physics_rigid_body *physics_rigid_body_b, BRX_PHYSICS_CONSTRAINT_TYPE constraint_type, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2]);
+extern "C" brx_physics_constraint *brx_physics_create_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_reference, brx_physics_rigid_body *physics_rigid_body_attached, BRX_PHYSICS_CONSTRAINT_TYPE constraint_type, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2]);
 
 extern "C" void brx_physics_destroy_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_constraint *physics_constraint);
 

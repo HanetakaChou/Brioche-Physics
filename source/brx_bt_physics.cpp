@@ -30,11 +30,14 @@
 #include <BulletDynamics/ConstraintSolver/btHingeConstraint.h>
 #include <BulletDynamics/ConstraintSolver/btSliderConstraint.h>
 #include <BulletDynamics/ConstraintSolver/btConeTwistConstraint.h>
-#include <LinearMath/btDefaultMotionState.h>
 
 static void *_internal_aligned_alloc(size_t size, int alignment);
 
 static void _internal_aligned_free(void *ptr);
+
+static constexpr float const INTERNAL_KINEMATIC_MASS = 1E12F;
+static constexpr float const INTERNAL_KINEMATIC_MASS_THRESHOLD = 1E6F;
+static constexpr float const INTERNAL_ZERO_THRESHOLD = 1E-6F;
 
 class brx_physics_context : public btITaskScheduler
 {
@@ -70,12 +73,13 @@ public:
 	inline void physics_world_add_constraint(btTypedConstraint *physics_constraint);
 	inline void physics_world_remove_constraint(btTypedConstraint *physics_constraint);
 	inline void physics_world_step(float delta_time, uint32_t max_substep_count, float substep_delta_time);
+	inline float get_local_time() const;
+	inline float get_fixed_time_step() const;
 };
 
 class brx_physics_rigid_body
 {
 	btCollisionShape *m_collision_shape;
-	btDefaultMotionState *m_motion_state;
 	btRigidBody *m_rigid_body;
 	int m_collision_filter_group;
 	int m_collision_filter_mask;
@@ -88,7 +92,7 @@ public:
 	inline btRigidBody *get_rigid_body() const;
 	inline int get_collision_filter_group() const;
 	inline int get_collision_filter_mask() const;
-	inline void set_body_transform(float const rotation[4], float const position[3]);
+	inline void apply_key_frame(float const local_time, float const rotation[4], float const position[3], float delta_time, uint32_t max_substep_count, float substep_delta_time);
 	inline void get_body_transform(float out_rotation[4], float out_position[3]) const;
 };
 
@@ -174,7 +178,7 @@ extern "C" brx_physics_rigid_body *brx_physics_create_rigid_body(brx_physics_con
 {
 	brx_physics_rigid_body *physics_rigid_body = new (btAlignedAlloc(sizeof(brx_physics_rigid_body), alignof(brx_physics_rigid_body))) brx_physics_rigid_body();
 
-	physics_rigid_body->init(physics_world, rotation, position, shape_type, shape_size, motion_type, collision_filter_group, collision_filter_mask, mass, linear_damping, angular_damping, restitution, friction);
+	physics_rigid_body->init(physics_world, rotation, position, shape_type, shape_size, motion_type, collision_filter_group, collision_filter_mask, mass, linear_damping, angular_damping, friction, restitution);
 
 	return physics_rigid_body;
 }
@@ -187,14 +191,10 @@ extern "C" void brx_physics_destroy_rigid_body(brx_physics_context *, brx_physic
 	btAlignedFree(physics_rigid_body);
 }
 
-extern "C" void brx_physics_rigid_body_apply_key_frame(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body, float const rotation[4], float const position[3], float delta_time)
+extern "C" void brx_physics_rigid_body_apply_key_frame(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body, float const rotation[4], float const position[3], float delta_time, uint32_t max_substep_count, float substep_delta_time)
 {
-	physics_rigid_body->set_body_transform(rotation, position);
-}
-
-extern "C" void brx_physics_rigid_body_set_transform(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body, float const rotation[4], float const position[3])
-{
-	physics_rigid_body->set_body_transform(rotation, position);
+	btAssert((physics_world->get_fixed_time_step() == 0.0F) || (physics_world->get_fixed_time_step() == substep_delta_time));
+	physics_rigid_body->apply_key_frame(physics_world->get_local_time(), rotation, position, delta_time, max_substep_count, substep_delta_time);
 }
 
 extern "C" void brx_physics_rigid_body_get_transform(brx_physics_context *, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body, float out_rotation[4], float out_position[3])
@@ -202,11 +202,11 @@ extern "C" void brx_physics_rigid_body_get_transform(brx_physics_context *, brx_
 	physics_rigid_body->get_body_transform(out_rotation, out_position);
 }
 
-extern "C" brx_physics_constraint *brx_physics_create_constraint(brx_physics_context *, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_a, brx_physics_rigid_body *physics_rigid_body_b, BRX_PHYSICS_CONSTRAINT_TYPE constraint_type, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2])
+extern "C" brx_physics_constraint *brx_physics_create_constraint(brx_physics_context *, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_reference, brx_physics_rigid_body *physics_rigid_body_attached, BRX_PHYSICS_CONSTRAINT_TYPE constraint_type, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2])
 {
 	brx_physics_constraint *physics_constraint = new (btAlignedAlloc(sizeof(brx_physics_constraint), alignof(brx_physics_constraint))) brx_physics_constraint();
 
-	physics_constraint->init(physics_world, physics_rigid_body_a->get_rigid_body(), physics_rigid_body_b->get_rigid_body(), constraint_type, pivot, twist_axis, plane_axis, normal_axis, twist_limit, plane_limit, normal_limit);
+	physics_constraint->init(physics_world, physics_rigid_body_reference->get_rigid_body(), physics_rigid_body_attached->get_rigid_body(), constraint_type, pivot, twist_axis, plane_axis, normal_axis, twist_limit, plane_limit, normal_limit);
 
 	return physics_constraint;
 }
@@ -330,7 +330,24 @@ inline void brx_physics_world::physics_world_remove_body(btRigidBody *rigid_body
 
 inline void brx_physics_world::physics_world_add_constraint(btTypedConstraint *physics_constraint)
 {
-	this->m_dynamics_world->addConstraint(physics_constraint);
+	// btHashedOverlappingPairCache::needsBroadphaseCollision
+	btRigidBody const &body0 = physics_constraint->getRigidBodyA();
+	btRigidBody const &body1 = physics_constraint->getRigidBodyB();
+
+	btBroadphaseProxy const *const proxy0 = body0.getBroadphaseProxy();
+	btBroadphaseProxy const *const proxy1 = body1.getBroadphaseProxy();
+
+	btRigidBody const *const rigidbody0 = btRigidBody::upcast(&body0);
+	btRigidBody const *const rigidbody1 = btRigidBody::upcast(&body1);
+
+	bool const kinematic0 = ((NULL != rigidbody0) && (rigidbody0->getMass() > INTERNAL_KINEMATIC_MASS_THRESHOLD) && (0 != (BT_DISABLE_WORLD_GRAVITY & rigidbody0->getFlags())));
+	bool const kinematic1 = ((NULL != rigidbody1) && (rigidbody1->getMass() > INTERNAL_KINEMATIC_MASS_THRESHOLD) && (0 != (BT_DISABLE_WORLD_GRAVITY & rigidbody1->getFlags())));
+	btAssert((!kinematic0) || (!kinematic1));
+
+	bool const collision01 = (0 != (proxy0->m_collisionFilterGroup & proxy1->m_collisionFilterMask)) && (0 != (proxy1->m_collisionFilterGroup & proxy0->m_collisionFilterMask));
+	btAssert(kinematic0 || kinematic1 || (!collision01));
+
+	this->m_dynamics_world->addConstraint(physics_constraint, (!collision01));
 }
 
 inline void brx_physics_world::physics_world_remove_constraint(btTypedConstraint *physics_constraint)
@@ -343,14 +360,23 @@ inline void brx_physics_world::physics_world_step(float delta_time, uint32_t max
 	this->m_dynamics_world->stepSimulation(delta_time, max_substep_count, substep_delta_time);
 }
 
-inline brx_physics_rigid_body::brx_physics_rigid_body() : m_collision_shape(NULL), m_motion_state(NULL), m_rigid_body(NULL), m_collision_filter_group(0), m_collision_filter_mask(0)
+inline float brx_physics_world::get_local_time() const
+{
+	return this->m_dynamics_world->m_localTime;
+}
+
+inline float brx_physics_world::get_fixed_time_step() const
+{
+	return this->m_dynamics_world->m_fixedTimeStep;
+}
+
+inline brx_physics_rigid_body::brx_physics_rigid_body() : m_collision_shape(NULL), m_rigid_body(NULL), m_collision_filter_group(0), m_collision_filter_mask(0)
 {
 }
 
 inline brx_physics_rigid_body::~brx_physics_rigid_body()
 {
 	btAssert(NULL == this->m_collision_shape);
-	btAssert(NULL == this->m_motion_state);
 	btAssert(NULL == this->m_rigid_body);
 }
 
@@ -358,8 +384,8 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 {
 	btAssert(NULL == this->m_collision_shape);
 
-	// btScalar min_dimension;
-	// btScalar max_dimension;
+	btScalar min_dimension;
+	btScalar max_dimension;
 	switch (wrapped_shape_type)
 	{
 	case BRX_PHYSICS_RIGID_BODY_SHAPE_SPHERE:
@@ -367,8 +393,8 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 		btAssert(BRX_PHYSICS_RIGID_BODY_SHAPE_SPHERE == wrapped_shape_type);
 		btScalar const radius = wrapped_shape_size[0];
 		this->m_collision_shape = new btSphereShape(radius);
-		// min_dimension = radius;
-		// max_dimension = radius;
+		min_dimension = radius;
+		max_dimension = radius;
 	}
 	break;
 	case BRX_PHYSICS_RIGID_BODY_SHAPE_BOX:
@@ -376,8 +402,8 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 		btAssert(BRX_PHYSICS_RIGID_BODY_SHAPE_BOX == wrapped_shape_type);
 		btVector3 const half_extents(wrapped_shape_size[0] * 0.5F, wrapped_shape_size[1] * 0.5F, wrapped_shape_size[2] * 0.5F);
 		this->m_collision_shape = new btBoxShape(half_extents);
-		// min_dimension = btMin(btMin(half_extents.getX(), half_extents.getY()), half_extents.getZ());
-		// max_dimension = btMax(btMax(half_extents.getX(), half_extents.getY()), half_extents.getZ());
+		min_dimension = btMin(btMin(half_extents.getX(), half_extents.getY()), half_extents.getZ());
+		max_dimension = btMax(btMax(half_extents.getX(), half_extents.getY()), half_extents.getZ());
 	}
 	break;
 	default:
@@ -385,41 +411,64 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 		float const radius = wrapped_shape_size[0];
 		float const height = wrapped_shape_size[1];
 		this->m_collision_shape = new btCapsuleShape(radius, height);
-		// min_dimension = btMin(radius, radius + height * 0.5F);
-		// max_dimension = btMax(radius, radius + height * 0.5F);
+		min_dimension = btMin(radius, radius + height * 0.5F);
+		max_dimension = btMax(radius, radius + height * 0.5F);
 	}
 	}
 
 	int collision_flags;
-	float mass;
+	int rigid_body_flags;
+	btScalar mass;
+	btScalar linear_damping;
+	btScalar angular_damping;
+	btScalar friction;
+	btScalar restitution;
+	bool additional_damping;
 	switch (wrapped_motion_type)
 	{
 	case BRX_PHYSICS_RIGID_BODY_MOTION_FIXED:
 	{
 		btAssert(BRX_PHYSICS_RIGID_BODY_MOTION_FIXED == wrapped_motion_type);
 		collision_flags = btCollisionObject::CF_STATIC_OBJECT;
+		rigid_body_flags = 0;
 		mass = 0.0F;
+		linear_damping = 0.0F;
+		angular_damping = 0.0F;
+		friction = wrapped_friction;
+		restitution = wrapped_restitution;
+		additional_damping = false;
 	}
 	break;
 	case BRX_PHYSICS_RIGID_BODY_MOTION_KEYFRAME:
 	{
 		btAssert(BRX_PHYSICS_RIGID_BODY_MOTION_KEYFRAME == wrapped_motion_type);
-		collision_flags = btCollisionObject::CF_KINEMATIC_OBJECT;
-		// NOTE: the mass of kinematic object should also be set to zero
-		// this is different from JoltPhysics
-		mass = 0.0F;
+		// To support CCD, we use really large mass dynamic object to simulate kinematic object
+		collision_flags = btCollisionObject::CF_DYNAMIC_OBJECT;
+		rigid_body_flags = BT_DISABLE_WORLD_GRAVITY;
+		mass = INTERNAL_KINEMATIC_MASS;
+		linear_damping = 0.0F;
+		angular_damping = 0.0F;
+		friction = wrapped_friction;
+		restitution = wrapped_restitution;
+		additional_damping = false;
 	}
 	break;
 	default:
 	{
 		btAssert(BRX_PHYSICS_RIGID_BODY_MOTION_DYNAMIC == wrapped_motion_type);
 		collision_flags = btCollisionObject::CF_DYNAMIC_OBJECT;
-		mass = btMax(wrapped_mass, 1E-6F);
+		rigid_body_flags = 0;
+		mass = btMin(btMax(wrapped_mass, INTERNAL_ZERO_THRESHOLD), INTERNAL_KINEMATIC_MASS_THRESHOLD);
+		linear_damping = wrapped_linear_damping;
+		angular_damping = wrapped_angular_damping;
+		friction = wrapped_friction;
+		restitution = wrapped_restitution;
+		additional_damping = true;
 	}
 	}
 
 	btVector3 local_inertia;
-	if (mass >= 1E-6F)
+	if (mass >= INTERNAL_ZERO_THRESHOLD)
 	{
 		this->m_collision_shape->calculateLocalInertia(mass, local_inertia);
 	}
@@ -428,36 +477,34 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 		local_inertia.setZero();
 	}
 
-	btAssert(NULL == this->m_motion_state);
-
-	btAssert(btFabs(btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).length() - 1.0F) < 1E-6F);
+	btAssert(btFabs(btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).length() - 1.0F) < INTERNAL_ZERO_THRESHOLD);
 	btTransform const transform(btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).normalized(), btVector3(wrapped_position[0], wrapped_position[1], wrapped_position[2]));
-
-	this->m_motion_state = new btDefaultMotionState(transform);
 
 	btAssert(NULL == this->m_rigid_body);
 
-	btRigidBody::btRigidBodyConstructionInfo construction_info(mass, this->m_motion_state, this->m_collision_shape, local_inertia);
-	construction_info.m_linearDamping = wrapped_linear_damping;
-	construction_info.m_angularDamping = wrapped_angular_damping;
-	construction_info.m_friction = wrapped_friction;
-	construction_info.m_restitution = wrapped_restitution;
-
+	btRigidBody::btRigidBodyConstructionInfo construction_info(mass, NULL, this->m_collision_shape, local_inertia);
+	construction_info.m_startWorldTransform = transform;
+	construction_info.m_linearDamping = linear_damping;
+	construction_info.m_angularDamping = angular_damping;
+	construction_info.m_friction = friction;
+	construction_info.m_restitution = restitution;
 	// TODO: how to specify addition damping on JoltPhysics?
-	construction_info.m_additionalDamping = true;
+	construction_info.m_additionalDamping = additional_damping;
 
 	this->m_rigid_body = new btRigidBody(construction_info);
 
 	this->m_rigid_body->setCollisionFlags(this->m_rigid_body->getCollisionFlags() | collision_flags);
+	this->m_rigid_body->setFlags(this->m_rigid_body->getFlags() | rigid_body_flags);
 
 	btAssert(gDisableDeactivation);
 	// TODO: why we still need to set these even if the "gDisableDeactivation" is set to true?
 	this->m_rigid_body->setSleepingThresholds(1E-2F, btRadians(1E-1F));
 	this->m_rigid_body->setActivationState(DISABLE_DEACTIVATION);
 
-	// TODO: CCD
-	// m_rigidBody->setCcdSweptSphereRadius((min_dimension + max_dimension) * 0.5F);
-	// m_rigidBody->setCcdMotionThreshold(max_dimension * 0.5F);
+	btScalar const ccd_swept_sphere_radius = btMax(INTERNAL_ZERO_THRESHOLD, min_dimension * 0.75F);
+	btScalar const ccd_motion_threshold = btMax(INTERNAL_ZERO_THRESHOLD, min_dimension * 0.25F);
+	this->m_rigid_body->setCcdSweptSphereRadius(ccd_swept_sphere_radius);
+	this->m_rigid_body->setCcdMotionThreshold(ccd_motion_threshold);
 
 	btAssert(0 == this->m_collision_filter_group);
 	btAssert(wrapped_collision_filter_group >= 0);
@@ -472,13 +519,12 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 
 inline void brx_physics_rigid_body::uninit(brx_physics_world *physics_world)
 {
+	btAssert(0U == this->m_rigid_body->getNumConstraintRefs());
+	btAssert(!this->m_rigid_body->isInWorld());
+
 	btAssert(NULL != this->m_rigid_body);
 	delete this->m_rigid_body;
 	this->m_rigid_body = NULL;
-
-	btAssert(NULL != this->m_motion_state);
-	delete this->m_motion_state;
-	this->m_motion_state = NULL;
 
 	btAssert(NULL != this->m_collision_shape);
 	delete this->m_collision_shape;
@@ -500,18 +546,74 @@ inline int brx_physics_rigid_body::get_collision_filter_mask() const
 	return this->m_collision_filter_mask;
 }
 
-inline void brx_physics_rigid_body::set_body_transform(float const wrapped_rotation[4], float const wrapped_position[3])
+inline void brx_physics_rigid_body::apply_key_frame(float const world_local_time, float const wrapped_rotation[4], float const wrapped_position[3], float delta_time, uint32_t max_substep_count, float substep_delta_time)
 {
-	btAssert(btFabs(btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).length() - 1.0F) < 1E-6F);
-	btTransform const transform(btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).normalized(), btVector3(wrapped_position[0], wrapped_position[1], wrapped_position[2]));
+	btAssert(this->m_rigid_body->getMass() > INTERNAL_KINEMATIC_MASS_THRESHOLD);
+	btAssert(0 != (BT_DISABLE_WORLD_GRAVITY & this->m_rigid_body->getFlags()));
 
-	this->m_rigid_body->getMotionState()->setWorldTransform(transform);
+	// [Body::MoveKinematic](https://github.com/jrouwe/JoltPhysics/blob/master/Jolt/Physics/Body/Body.cpp#L81)
+	// [MotionProperties::MoveKinematic](https://github.com/jrouwe/JoltPhysics/blob/master/Jolt/Physics/Body/MotionProperties.inl#L9)
+
+	// btDiscreteDynamicsWorld::integrateTransformsInternal
+	// btKinematicCharacterController::stepUp
+
+	// btDiscreteDynamicsWorld::stepSimulation
+	float timp_step;
+	{
+		float const fixed_time_step = substep_delta_time;
+		int const max_sub_steps = max_substep_count;
+
+		int num_simulation_sub_steps;
+		{
+			float const local_time = world_local_time + delta_time;
+			if (local_time >= fixed_time_step)
+			{
+				num_simulation_sub_steps = int(local_time / fixed_time_step);
+				btAssert(local_time >= (num_simulation_sub_steps * fixed_time_step));
+			}
+			else
+			{
+				num_simulation_sub_steps = 0;
+			}
+		}
+
+		if (num_simulation_sub_steps > 0)
+		{
+			btAssert(num_simulation_sub_steps <= max_sub_steps);
+			int clamped_simulation_steps = (num_simulation_sub_steps < max_sub_steps) ? num_simulation_sub_steps : max_sub_steps;
+
+			timp_step = fixed_time_step * clamped_simulation_steps;
+		}
+		else
+		{
+			timp_step = -1.0F;
+		}
+	}
+
+	// btRigidBody::saveKinematicState
+	if (timp_step > 0.0F)
+	{
+		btAssert(btFabs(btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).length() - 1.0F) < INTERNAL_ZERO_THRESHOLD);
+		btQuaternion const target_rotation = btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).normalized();
+		btVector3 const target_position(wrapped_position[0], wrapped_position[1], wrapped_position[2]);
+		btTransform const target_transform(target_rotation, target_position);
+
+		btTransform current_transform = this->m_rigid_body->getWorldTransform();
+
+		btVector3 linear_velocity;
+		btVector3 angular_velocity;
+		btTransformUtil::calculateVelocity(current_transform, target_transform, timp_step, linear_velocity, angular_velocity);
+
+		this->m_rigid_body->clearForces();
+		this->m_rigid_body->setAngularVelocity(angular_velocity);
+		this->m_rigid_body->setLinearVelocity(linear_velocity);
+		this->m_rigid_body->activate(true);
+	}
 }
 
 inline void brx_physics_rigid_body::get_body_transform(float out_rotation[4], float out_position[3]) const
 {
-	btTransform transform;
-	this->m_rigid_body->getMotionState()->getWorldTransform(transform);
+	btTransform transform = this->m_rigid_body->getWorldTransform();
 
 	btQuaternion rotation = transform.getRotation();
 	out_rotation[0] = rotation.getX();
@@ -534,13 +636,19 @@ inline brx_physics_constraint::~brx_physics_constraint()
 	btAssert(NULL == this->m_constraint);
 }
 
-inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRigidBody *rigid_body_a, btRigidBody *rigid_body_b, BRX_PHYSICS_CONSTRAINT_TYPE wrapped_constraint_type, float const wrapped_pivot[3], float const wrapped_twist_axis[3], float const wrapped_plane_axis[3], float const wrapped_normal_axis[3], float const wrapped_twist_limit[2], float const wrapped_plane_limit[2], float const wrapped_normal_limit[2])
+inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRigidBody *rigid_body_reference, btRigidBody *rigid_body_attached, BRX_PHYSICS_CONSTRAINT_TYPE wrapped_constraint_type, float const wrapped_pivot[3], float const wrapped_twist_axis[3], float const wrapped_plane_axis[3], float const wrapped_normal_axis[3], float const wrapped_twist_limit[2], float const wrapped_plane_limit[2], float const wrapped_normal_limit[2])
 {
 	// https://help.autodesk.com/view/MAYAUL/2024/ENU/?guid=GUID-CDB3638D-23AF-49EF-8EF6-53081EE4D39D
 
-	constexpr btScalar const epsilon = 1E-6F;
+	// convention
+	//
+	// pivot: child bone (head) position
+	//
+	// rigid body reference: mapped to parent bone, centered at the midpoint of parent bone (head) position and child bone (head) position
+	//
+	// rigid body attached: mapped to child bone, centered at the midpoint of child bone (head) position and "child of child" bone (head) position
 
-	btAssert((btCross(btVector3(wrapped_twist_axis[0], wrapped_twist_axis[1], wrapped_twist_axis[2]), btVector3(wrapped_plane_axis[0], wrapped_plane_axis[1], wrapped_plane_axis[2])) - btVector3(wrapped_normal_axis[0], wrapped_normal_axis[1], wrapped_normal_axis[2])).length() < epsilon);
+	btAssert((btCross(btVector3(wrapped_twist_axis[0], wrapped_twist_axis[1], wrapped_twist_axis[2]), btVector3(wrapped_plane_axis[0], wrapped_plane_axis[1], wrapped_plane_axis[2])) - btVector3(wrapped_normal_axis[0], wrapped_normal_axis[1], wrapped_normal_axis[2])).length() < INTERNAL_ZERO_THRESHOLD);
 
 	btTransform const joint_world_transform(
 		btMatrix3x3(wrapped_twist_axis[0], wrapped_plane_axis[0], wrapped_normal_axis[0],
@@ -548,14 +656,12 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 					wrapped_twist_axis[2], wrapped_plane_axis[2], wrapped_normal_axis[2]),
 		btVector3(wrapped_pivot[0], wrapped_pivot[1], wrapped_pivot[2]));
 
-	btTransform rigid_body_a_world_transform;
-	rigid_body_a->getMotionState()->getWorldTransform(rigid_body_a_world_transform);
+	btTransform rigid_body_reference_world_transform = rigid_body_reference->getWorldTransform();
 
-	btTransform rigid_body_b_world_transform;
-	rigid_body_b->getMotionState()->getWorldTransform(rigid_body_b_world_transform);
+	btTransform rigid_body_attached_world_transform = rigid_body_attached->getWorldTransform();
 
-	btTransform const frame_a = rigid_body_a_world_transform.inverse() * joint_world_transform;
-	btTransform const frame_b = rigid_body_b_world_transform.inverse() * joint_world_transform;
+	btTransform const frame_reference = rigid_body_reference_world_transform.inverse() * joint_world_transform;
+	btTransform const frame_attached = rigid_body_attached_world_transform.inverse() * joint_world_transform;
 
 	btAssert(NULL == this->m_constraint);
 	{
@@ -565,14 +671,14 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 		{
 			btAssert(BRX_PHYSICS_CONSTRAINT_FIXED == wrapped_constraint_type);
 
-			btFixedConstraint *constraint = new btFixedConstraint(*rigid_body_a, *rigid_body_b, frame_a, frame_b);
+			btFixedConstraint *constraint = new btFixedConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference);
 
-			btAssert(btFabs(wrapped_twist_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_twist_limit[1]) < epsilon);
-			btAssert(btFabs(wrapped_plane_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_plane_limit[1]) < epsilon);
-			btAssert(btFabs(wrapped_normal_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_normal_limit[1]) < epsilon);
+			btAssert(btFabs(wrapped_twist_limit[0]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_twist_limit[1]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_plane_limit[0]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_plane_limit[1]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_normal_limit[0]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_normal_limit[1]) < INTERNAL_ZERO_THRESHOLD);
 
 			this->m_constraint = constraint;
 		}
@@ -581,14 +687,14 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 		{
 			btAssert(BRX_PHYSICS_CONSTRAINT_BALL_AND_SOCKET == wrapped_constraint_type);
 
-			btPoint2PointConstraint *constraint = new btPoint2PointConstraint(*rigid_body_a, *rigid_body_b, frame_a.getOrigin(), frame_b.getOrigin());
+			btPoint2PointConstraint *constraint = new btPoint2PointConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached.getOrigin(), frame_reference.getOrigin());
 
-			btAssert(btFabs(wrapped_twist_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_twist_limit[1]) < epsilon);
-			btAssert(btFabs(wrapped_plane_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_plane_limit[1]) < epsilon);
-			btAssert(btFabs(wrapped_normal_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_normal_limit[1]) < epsilon);
+			btAssert(btFabs(wrapped_twist_limit[0]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_twist_limit[1]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_plane_limit[0]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_plane_limit[1]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_normal_limit[0]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_normal_limit[1]) < INTERNAL_ZERO_THRESHOLD);
 
 			this->m_constraint = constraint;
 		}
@@ -597,14 +703,14 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 		{
 			btAssert(BRX_PHYSICS_CONSTRAINT_HINGE == wrapped_constraint_type);
 
-			btHingeConstraint *constraint = new btHingeConstraint(*rigid_body_a, *rigid_body_b, frame_a, frame_b, true);
+			btHingeConstraint *constraint = new btHingeConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference, false);
 
-			btAssert(btFabs(wrapped_twist_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_twist_limit[1]) < epsilon);
-			btAssert(btFabs(wrapped_plane_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_plane_limit[1]) < epsilon);
+			btAssert(btFabs(wrapped_twist_limit[0]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_twist_limit[1]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_plane_limit[0]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_plane_limit[1]) < INTERNAL_ZERO_THRESHOLD);
 
-			btAssert(wrapped_normal_limit[0] < wrapped_normal_limit[1]);
+			btAssert(wrapped_normal_limit[0] <= wrapped_normal_limit[1]);
 			btAssert(wrapped_normal_limit[0] >= (SIMD_PI * -1.0F));
 			btAssert(wrapped_normal_limit[0] <= (SIMD_PI * 1.0F));
 			btAssert(wrapped_normal_limit[1] >= (SIMD_PI * -1.0F));
@@ -618,16 +724,18 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 		{
 			btAssert(BRX_PHYSICS_CONSTRAINT_PRISMATIC == wrapped_constraint_type);
 
-			btSliderConstraint *constraint = new btSliderConstraint(*rigid_body_a, *rigid_body_b, frame_a, frame_b, true);
+			btSliderConstraint *constraint = new btSliderConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference, false);
 
-			btAssert(btFabs(wrapped_twist_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_twist_limit[1]) < epsilon);
-			btAssert(btFabs(wrapped_plane_limit[0]) < epsilon);
-			btAssert(btFabs(wrapped_plane_limit[1]) < epsilon);
+			btAssert(btFabs(wrapped_plane_limit[0]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_plane_limit[1]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_normal_limit[0]) < INTERNAL_ZERO_THRESHOLD);
+			btAssert(btFabs(wrapped_normal_limit[1]) < INTERNAL_ZERO_THRESHOLD);
 
-			btAssert(wrapped_normal_limit[0] <= wrapped_normal_limit[1]);
-			constraint->setLowerLinLimit(btMin(wrapped_normal_limit[0], wrapped_normal_limit[1]));
-			constraint->setUpperLinLimit(btMax(wrapped_normal_limit[0], wrapped_normal_limit[1]));
+			btAssert(wrapped_twist_limit[0] <= wrapped_twist_limit[1]);
+			constraint->setLowerLinLimit(btMin(wrapped_twist_limit[0], wrapped_twist_limit[1]));
+			constraint->setUpperLinLimit(btMax(wrapped_twist_limit[0], wrapped_twist_limit[1]));
+			constraint->setLowerAngLimit(0.0F);
+			constraint->setUpperAngLimit(0.0F);
 
 			this->m_constraint = constraint;
 		}
@@ -662,7 +770,7 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 			btAssert(twist_span <= swing_span1);
 			btAssert(twist_span <= swing_span2);
 
-			btConeTwistConstraint *constraint = new btConeTwistConstraint(*rigid_body_a, *rigid_body_b, frame_a, frame_b);
+			btConeTwistConstraint *constraint = new btConeTwistConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference);
 			constraint->setLimit(swing_span1, swing_span2, twist_span);
 
 			this->m_constraint = constraint;

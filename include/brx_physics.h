@@ -83,9 +83,7 @@ extern "C" brx_physics_rigid_body *brx_physics_create_rigid_body(brx_physics_con
 
 extern "C" void brx_physics_destroy_rigid_body(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body);
 
-extern "C" void brx_physics_rigid_body_apply_key_frame(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body, float const rotation[4], float const position[3], float delta_time);
-
-extern "C" void brx_physics_rigid_body_set_transform(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body, float const rotation[4], float const position[3]);
+extern "C" void brx_physics_rigid_body_apply_key_frame(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body, float const rotation[4], float const position[3], float delta_time, uint32_t max_substep_count, float substep_delta_time);
 
 extern "C" void brx_physics_rigid_body_get_transform(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body, float out_rotation[4], float out_position[3]);
 
@@ -101,7 +99,7 @@ extern "C" void brx_physics_rigid_body_get_transform(brx_physics_context *physic
 //
 // ragdoll (swing twist)
 
-extern "C" brx_physics_constraint *brx_physics_create_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_a, brx_physics_rigid_body *physics_rigid_body_b, BRX_PHYSICS_CONSTRAINT_TYPE constraint_type, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2]);
+extern "C" brx_physics_constraint *brx_physics_create_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_reference, brx_physics_rigid_body *physics_rigid_body_attached, BRX_PHYSICS_CONSTRAINT_TYPE constraint_type, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2]);
 
 extern "C" void brx_physics_destroy_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_constraint *physics_constraint);
 

@@ -11,7 +11,6 @@ EXPORTS
 	brx_physics_create_rigid_body
 	brx_physics_destroy_rigid_body
 	brx_physics_rigid_body_apply_key_frame
-	brx_physics_rigid_body_set_transform
 	brx_physics_rigid_body_get_transform
 	brx_physics_create_constraint
 	brx_physics_destroy_constraint

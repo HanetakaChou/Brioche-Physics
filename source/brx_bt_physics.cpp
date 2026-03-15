@@ -39,6 +39,33 @@ static constexpr float const INTERNAL_KINEMATIC_MASS = 1E12F;
 static constexpr float const INTERNAL_KINEMATIC_MASS_THRESHOLD = 1E6F;
 static constexpr float const INTERNAL_ZERO_THRESHOLD = 1E-6F;
 
+struct brx_overlap_filter_callback : btOverlapFilterCallback
+{
+	bool needBroadphaseCollision(btBroadphaseProxy *proxy0, btBroadphaseProxy *proxy1) const override
+	{
+		// btHashedOverlappingPairCache::needsBroadphaseCollision
+		btCollisionObject const *const obj0 = static_cast<btCollisionObject *>(proxy0->m_clientObject);
+		btCollisionObject const *const obj1 = static_cast<btCollisionObject *>(proxy1->m_clientObject);
+
+		btRigidBody const *const body0 = btRigidBody::upcast(obj0);
+		btRigidBody const *const body1 = btRigidBody::upcast(obj1);
+
+		bool const kinematic0 = ((NULL != body0) && (body0->getMass() > INTERNAL_KINEMATIC_MASS_THRESHOLD) && (0 != (BT_DISABLE_WORLD_GRAVITY & body0->getFlags())));
+		bool const kinematic1 = ((NULL != body1) && (body1->getMass() > INTERNAL_KINEMATIC_MASS_THRESHOLD) && (0 != (BT_DISABLE_WORLD_GRAVITY & body1->getFlags())));
+		if ((!kinematic0) || (!kinematic1))
+		{
+			bool const collision01 = (0 != (proxy0->m_collisionFilterGroup & proxy1->m_collisionFilterMask)) && (0 != (proxy1->m_collisionFilterGroup & proxy0->m_collisionFilterMask));
+			return collision01;
+		}
+		else
+		{
+			return false;
+		}
+	}
+};
+
+static brx_overlap_filter_callback internal_overlap_filter_callback;
+
 class brx_physics_context : public btITaskScheduler
 {
 public:
@@ -282,6 +309,8 @@ inline void brx_physics_world::init(float const wrapped_gravity[3])
 	btAssert(NULL == this->m_dynamics_world);
 	this->m_dynamics_world = new btDiscreteDynamicsWorldMt(this->m_collision_dispatcher, this->m_broad_phase, this->m_constraint_solver_pool, this->m_constraint_solver, this->m_collision_configuration);
 
+	this->m_dynamics_world->getPairCache()->setOverlapFilterCallback(&internal_overlap_filter_callback);
+
 	this->m_dynamics_world->setGravity(btVector3(wrapped_gravity[0], wrapped_gravity[1], wrapped_gravity[2]));
 
 	btAssert(this->m_dynamics_world->getDispatchInfo().m_useContinuous);
@@ -337,17 +366,28 @@ inline void brx_physics_world::physics_world_add_constraint(btTypedConstraint *p
 	btBroadphaseProxy const *const proxy0 = body0.getBroadphaseProxy();
 	btBroadphaseProxy const *const proxy1 = body1.getBroadphaseProxy();
 
-	btRigidBody const *const rigidbody0 = btRigidBody::upcast(&body0);
-	btRigidBody const *const rigidbody1 = btRigidBody::upcast(&body1);
-
-	bool const kinematic0 = ((NULL != rigidbody0) && (rigidbody0->getMass() > INTERNAL_KINEMATIC_MASS_THRESHOLD) && (0 != (BT_DISABLE_WORLD_GRAVITY & rigidbody0->getFlags())));
-	bool const kinematic1 = ((NULL != rigidbody1) && (rigidbody1->getMass() > INTERNAL_KINEMATIC_MASS_THRESHOLD) && (0 != (BT_DISABLE_WORLD_GRAVITY & rigidbody1->getFlags())));
-	btAssert((!kinematic0) || (!kinematic1));
-
-	bool const collision01 = (0 != (proxy0->m_collisionFilterGroup & proxy1->m_collisionFilterMask)) && (0 != (proxy1->m_collisionFilterGroup & proxy0->m_collisionFilterMask));
-	btAssert(kinematic0 || kinematic1 || (!collision01));
-
-	this->m_dynamics_world->addConstraint(physics_constraint, (!collision01));
+	bool const kinematic0 = ((body0.getMass() > INTERNAL_KINEMATIC_MASS_THRESHOLD) && (0 != (BT_DISABLE_WORLD_GRAVITY & body0.getFlags())));
+	bool const kinematic1 = ((body1.getMass() > INTERNAL_KINEMATIC_MASS_THRESHOLD) && (0 != (BT_DISABLE_WORLD_GRAVITY & body1.getFlags())));
+	if ((!kinematic0) || (!kinematic1))
+	{
+		bool const collision01 = (0 != (proxy0->m_collisionFilterGroup & proxy1->m_collisionFilterMask)) && (0 != (proxy1->m_collisionFilterGroup & proxy0->m_collisionFilterMask));
+		if ((!kinematic0) && (!kinematic1))
+		{
+			// TODO: usually we do not need?
+			btAssert(!collision01);
+			this->m_dynamics_world->addConstraint(physics_constraint, true);
+		}
+		else
+		{
+			this->m_dynamics_world->addConstraint(physics_constraint, (!collision01));
+		}
+	}
+	else
+	{
+		// no constaint between kinematic and kinematic
+		btAssert(false);
+		this->m_dynamics_world->addConstraint(physics_constraint, true);
+	}
 }
 
 inline void brx_physics_world::physics_world_remove_constraint(btTypedConstraint *physics_constraint)
@@ -424,6 +464,8 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 	btScalar friction;
 	btScalar restitution;
 	bool additional_damping;
+	btVector3 linear_factor;
+	btVector3 angular_factor;
 	switch (wrapped_motion_type)
 	{
 	case BRX_PHYSICS_RIGID_BODY_MOTION_FIXED:
@@ -437,6 +479,8 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 		friction = wrapped_friction;
 		restitution = wrapped_restitution;
 		additional_damping = false;
+		linear_factor = btVector3(1.0F, 1.0F, 1.0F);
+		angular_factor = btVector3(1.0F, 1.0F, 1.0F);
 	}
 	break;
 	case BRX_PHYSICS_RIGID_BODY_MOTION_KEYFRAME:
@@ -451,6 +495,8 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 		friction = wrapped_friction;
 		restitution = wrapped_restitution;
 		additional_damping = false;
+		linear_factor = btVector3(0.0F, 0.0F, 0.0F);
+		angular_factor = btVector3(0.0F, 0.0F, 0.0F);
 	}
 	break;
 	default:
@@ -464,6 +510,8 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 		friction = wrapped_friction;
 		restitution = wrapped_restitution;
 		additional_damping = true;
+		linear_factor = btVector3(1.0F, 1.0F, 1.0F);
+		angular_factor = btVector3(1.0F, 1.0F, 1.0F);
 	}
 	}
 
@@ -492,6 +540,9 @@ inline void brx_physics_rigid_body::init(brx_physics_world *physics_world, float
 	construction_info.m_additionalDamping = additional_damping;
 
 	this->m_rigid_body = new btRigidBody(construction_info);
+
+	this->m_rigid_body->setLinearFactor(linear_factor);
+	this->m_rigid_body->setAngularFactor(angular_factor);
 
 	this->m_rigid_body->setCollisionFlags(this->m_rigid_body->getCollisionFlags() | collision_flags);
 	this->m_rigid_body->setFlags(this->m_rigid_body->getFlags() | rigid_body_flags);

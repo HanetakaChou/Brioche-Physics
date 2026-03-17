@@ -37,11 +37,8 @@ enum BRX_PHYSICS_RIGID_BODY_MOTION_TYPE : uint32_t
 
 enum BRX_PHYSICS_CONSTRAINT_TYPE : uint32_t
 {
-    BRX_PHYSICS_CONSTRAINT_FIXED = 0,
-    BRX_PHYSICS_CONSTRAINT_BALL_AND_SOCKET = 1,
-    BRX_PHYSICS_CONSTRAINT_HINGE = 2,
-    BRX_PHYSICS_CONSTRAINT_PRISMATIC = 3,
-    BRX_PHYSICS_CONSTRAINT_RAGDOLL = 4
+    BRX_PHYSICS_CONSTRAINT_RAGDOLL = 0,
+    BRX_PHYSICS_CONSTRAINT_6DOF = 1
 };
 
 class brx_physics_context;
@@ -89,17 +86,13 @@ extern "C" void brx_physics_rigid_body_get_transform(brx_physics_context *physic
 
 // [RagdollLoader::sLoad](https://github.com/jrouwe/JoltPhysics/blob/master/Samples/Utils/RagdollLoader.cpp#L24)
 
-// fixed
-//
-// ball and socket (point)
-//
-// hinge
-//
-// prismatic (slider)
-//
 // ragdoll (swing twist)
+//
+// 6dof
 
-extern "C" brx_physics_constraint *brx_physics_create_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_reference, brx_physics_rigid_body *physics_rigid_body_attached, BRX_PHYSICS_CONSTRAINT_TYPE constraint_type, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2]);
+extern "C" brx_physics_constraint *brx_physics_create_ragdoll_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_reference, brx_physics_rigid_body *physics_rigid_body_attached, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2]);
+
+extern "C" brx_physics_constraint *brx_physics_create_6dof_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_reference, brx_physics_rigid_body *physics_rigid_body_attached, float const rotation[4], float const translation[3], float const rotation_limit_min[3], float const rotation_limit_max[3], float const translation_limit_min[3], float const translation_limit_max[3], float const rotation_spring[3], float const translation_spring[3]);
 
 extern "C" void brx_physics_destroy_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_constraint *physics_constraint);
 

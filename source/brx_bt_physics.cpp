@@ -25,11 +25,8 @@
 #include <BulletCollision/CollisionShapes/btCapsuleShape.h>
 #include <BulletDynamics/Dynamics/btDiscreteDynamicsWorldMt.h>
 #include <BulletDynamics/ConstraintSolver/btSequentialImpulseConstraintSolverMt.h>
-#include <BulletDynamics/ConstraintSolver/btFixedConstraint.h>
-#include <BulletDynamics/ConstraintSolver/btPoint2PointConstraint.h>
-#include <BulletDynamics/ConstraintSolver/btHingeConstraint.h>
-#include <BulletDynamics/ConstraintSolver/btSliderConstraint.h>
 #include <BulletDynamics/ConstraintSolver/btConeTwistConstraint.h>
+#include <BulletDynamics/ConstraintSolver/btGeneric6DofSpring2Constraint.h>
 
 static void *_internal_aligned_alloc(size_t size, int alignment);
 
@@ -130,7 +127,8 @@ class brx_physics_constraint
 public:
 	inline brx_physics_constraint();
 	inline ~brx_physics_constraint();
-	inline void init(brx_physics_world *physics_world, btRigidBody *rigid_body_a, btRigidBody *rigid_body_b, BRX_PHYSICS_CONSTRAINT_TYPE constraint_type, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2]);
+	inline void init_ragdoll(btRigidBody *rigid_body_reference, btRigidBody *rigid_body_attached, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2]);
+	inline void init_6dof(btRigidBody *rigid_body_reference, btRigidBody *rigid_body_attached, float const rotation[4], float const translation[3], float const rotation_limit_min[3], float const rotation_limit_max[3], float const translation_limit_min[3], float const translation_limit_max[3], float const rotation_spring[3], float const translation_spring[3]);
 	inline void uninit();
 	inline btTypedConstraint *get_constraint() const;
 };
@@ -229,11 +227,20 @@ extern "C" void brx_physics_rigid_body_get_transform(brx_physics_context *, brx_
 	physics_rigid_body->get_body_transform(out_rotation, out_position);
 }
 
-extern "C" brx_physics_constraint *brx_physics_create_constraint(brx_physics_context *, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_reference, brx_physics_rigid_body *physics_rigid_body_attached, BRX_PHYSICS_CONSTRAINT_TYPE constraint_type, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2])
+extern "C" brx_physics_constraint *brx_physics_create_ragdoll_constraint(brx_physics_context *, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_reference, brx_physics_rigid_body *physics_rigid_body_attached, float const pivot[3], float const twist_axis[3], float const plane_axis[3], float const normal_axis[3], float const twist_limit[2], float const plane_limit[2], float const normal_limit[2])
 {
 	brx_physics_constraint *physics_constraint = new (btAlignedAlloc(sizeof(brx_physics_constraint), alignof(brx_physics_constraint))) brx_physics_constraint();
 
-	physics_constraint->init(physics_world, physics_rigid_body_reference->get_rigid_body(), physics_rigid_body_attached->get_rigid_body(), constraint_type, pivot, twist_axis, plane_axis, normal_axis, twist_limit, plane_limit, normal_limit);
+	physics_constraint->init_ragdoll(physics_rigid_body_reference->get_rigid_body(), physics_rigid_body_attached->get_rigid_body(), pivot, twist_axis, plane_axis, normal_axis, twist_limit, plane_limit, normal_limit);
+
+	return physics_constraint;
+}
+
+extern "C" brx_physics_constraint *brx_physics_create_6dof_constraint(brx_physics_context *physics_context, brx_physics_world *physics_world, brx_physics_rigid_body *physics_rigid_body_reference, brx_physics_rigid_body *physics_rigid_body_attached, float const rotation[4], float const translation[3], float const rotation_limit_min[3], float const rotation_limit_max[3], float const translation_limit_min[3], float const translation_limit_max[3], float const rotation_spring[3], float const translation_spring[3])
+{
+	brx_physics_constraint *physics_constraint = new (btAlignedAlloc(sizeof(brx_physics_constraint), alignof(brx_physics_constraint))) brx_physics_constraint();
+
+	physics_constraint->init_6dof(physics_rigid_body_reference->get_rigid_body(), physics_rigid_body_attached->get_rigid_body(), rotation, translation, rotation_limit_min, rotation_limit_max, translation_limit_min, translation_limit_max, rotation_spring, translation_spring);
 
 	return physics_constraint;
 }
@@ -687,7 +694,7 @@ inline brx_physics_constraint::~brx_physics_constraint()
 	btAssert(NULL == this->m_constraint);
 }
 
-inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRigidBody *rigid_body_reference, btRigidBody *rigid_body_attached, BRX_PHYSICS_CONSTRAINT_TYPE wrapped_constraint_type, float const wrapped_pivot[3], float const wrapped_twist_axis[3], float const wrapped_plane_axis[3], float const wrapped_normal_axis[3], float const wrapped_twist_limit[2], float const wrapped_plane_limit[2], float const wrapped_normal_limit[2])
+inline void brx_physics_constraint::init_ragdoll(btRigidBody *rigid_body_reference, btRigidBody *rigid_body_attached, float const wrapped_pivot[3], float const wrapped_twist_axis[3], float const wrapped_plane_axis[3], float const wrapped_normal_axis[3], float const wrapped_twist_limit[2], float const wrapped_plane_limit[2], float const wrapped_normal_limit[2])
 {
 	// https://help.autodesk.com/view/MAYAUL/2024/ENU/?guid=GUID-CDB3638D-23AF-49EF-8EF6-53081EE4D39D
 
@@ -714,120 +721,162 @@ inline void brx_physics_constraint::init(brx_physics_world *physics_world, btRig
 	btTransform const frame_reference = rigid_body_reference_world_transform.inverse() * joint_world_transform;
 	btTransform const frame_attached = rigid_body_attached_world_transform.inverse() * joint_world_transform;
 
+	btConeTwistConstraint *constraint = new btConeTwistConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference);
+
+	btAssert(wrapped_twist_limit[0] <= wrapped_twist_limit[1]);
+	btAssert(wrapped_twist_limit[0] >= (SIMD_PI * -1.0F));
+	btAssert(wrapped_twist_limit[0] <= (SIMD_PI * 1.0F));
+	btAssert(wrapped_twist_limit[1] >= (SIMD_PI * -1.0F));
+	btAssert(wrapped_twist_limit[1] <= (SIMD_PI * 1.0F));
+	btScalar const twist_span = btMin(btMax(btFabs(wrapped_twist_limit[0]), btFabs(wrapped_twist_limit[1])), (SIMD_PI * 1.0F));
+
+	// TODO: do we really should allow equal?
+	btAssert(wrapped_plane_limit[0] <= wrapped_plane_limit[1]);
+	btAssert(wrapped_plane_limit[0] >= (SIMD_PI * -0.5F));
+	btAssert(wrapped_plane_limit[0] <= (SIMD_PI * 0.5F));
+	btAssert(wrapped_plane_limit[1] >= (SIMD_PI * -0.5F));
+	btAssert(wrapped_plane_limit[1] <= (SIMD_PI * 0.5F));
+	btScalar const swing_span2 = btMin(btMax(btFabs(wrapped_plane_limit[0]), btFabs(wrapped_plane_limit[1])), (SIMD_PI * 0.5F));
+
+	// TODO: do we really should allow equal?
+	btAssert(wrapped_normal_limit[0] <= wrapped_normal_limit[1]);
+	btAssert(wrapped_normal_limit[0] >= (SIMD_PI * -0.5F));
+	btAssert(wrapped_normal_limit[0] <= (SIMD_PI * 0.5F));
+	btAssert(wrapped_normal_limit[1] >= (SIMD_PI * -0.5F));
+	btAssert(wrapped_normal_limit[1] <= (SIMD_PI * 0.5F));
+	btScalar const swing_span1 = btMin(btMax(btFabs(wrapped_normal_limit[0]), btFabs(wrapped_normal_limit[1])), (SIMD_PI * 0.5F));
+
+	btAssert(twist_span <= swing_span1);
+	btAssert(twist_span <= swing_span2);
+
+	constraint->setLimit(swing_span1, swing_span2, twist_span);
+
 	btAssert(NULL == this->m_constraint);
+	this->m_constraint = constraint;
+}
+
+inline void brx_physics_constraint::init_6dof(btRigidBody *rigid_body_reference, btRigidBody *rigid_body_attached, float const wrapped_rotation[4], float const wrapped_translation[3], float const wrapped_rotation_limit_min[3], float const wrapped_rotation_limit_max[3], float const wrapped_translation_limit_min[3], float const wrapped_translation_limit_max[3], float const wrapped_rotation_spring[3], float const wrapped_translation_spring[3])
+{
+	btAssert(btFabs(btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).length() - 1.0F) < INTERNAL_ZERO_THRESHOLD);
+	btTransform const joint_world_transform(btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).normalized(), btVector3(wrapped_translation[0], wrapped_translation[1], wrapped_translation[2]));
+
+	btTransform rigid_body_reference_world_transform = rigid_body_reference->getWorldTransform();
+
+	btTransform rigid_body_attached_world_transform = rigid_body_attached->getWorldTransform();
+
+	btTransform const frame_reference = rigid_body_reference_world_transform.inverse() * joint_world_transform;
+	btTransform const frame_attached = rigid_body_attached_world_transform.inverse() * joint_world_transform;
+
+	btGeneric6DofSpring2Constraint *constraint = new btGeneric6DofSpring2Constraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference, RO_XYZ);
+
+	btAssert(wrapped_rotation_limit_min[0] <= wrapped_rotation_limit_max[0]);
+	btAssert(wrapped_rotation_limit_min[1] <= wrapped_rotation_limit_max[1]);
+	btAssert(wrapped_rotation_limit_min[2] <= wrapped_rotation_limit_max[2]);
+	btVector3 const angular_lower(
+		btMin(wrapped_rotation_limit_min[0], wrapped_rotation_limit_max[0]),
+		btMin(wrapped_rotation_limit_min[1], wrapped_rotation_limit_max[1]),
+		btMin(wrapped_rotation_limit_min[2], wrapped_rotation_limit_max[2]));
+	btVector3 const angular_upper(
+		btMax(wrapped_rotation_limit_min[0], wrapped_rotation_limit_max[0]),
+		btMax(wrapped_rotation_limit_min[1], wrapped_rotation_limit_max[1]),
+		btMax(wrapped_rotation_limit_min[2], wrapped_rotation_limit_max[2]));
+	constraint->setAngularLowerLimit(angular_lower);
+	constraint->setAngularUpperLimit(angular_upper);
+
+	btAssert(wrapped_translation_limit_min[0] <= wrapped_translation_limit_max[0]);
+	btAssert(wrapped_translation_limit_min[1] <= wrapped_translation_limit_max[1]);
+	btAssert(wrapped_translation_limit_min[2] <= wrapped_translation_limit_max[2]);
+	btVector3 const linear_lower(
+		btMin(wrapped_translation_limit_min[0], wrapped_translation_limit_max[0]),
+		btMin(wrapped_translation_limit_min[1], wrapped_translation_limit_max[1]),
+		btMin(wrapped_translation_limit_min[2], wrapped_translation_limit_max[2]));
+	btVector3 const linear_upper(
+		btMax(wrapped_translation_limit_min[0], wrapped_translation_limit_max[0]),
+		btMax(wrapped_translation_limit_min[1], wrapped_translation_limit_max[1]),
+		btMax(wrapped_translation_limit_min[2], wrapped_translation_limit_max[2]));
+	constraint->setLinearLowerLimit(linear_lower);
+	constraint->setLinearUpperLimit(linear_upper);
+
+	btAssert(0.0F <= wrapped_rotation_spring[0]);
+	btScalar const rotation_x_spring = btMax(0.0F, wrapped_rotation_spring[0]);
+
+	if (rotation_x_spring > INTERNAL_ZERO_THRESHOLD)
 	{
-		switch (wrapped_constraint_type)
-		{
-		case BRX_PHYSICS_CONSTRAINT_FIXED:
-		{
-			btAssert(BRX_PHYSICS_CONSTRAINT_FIXED == wrapped_constraint_type);
-
-			btFixedConstraint *constraint = new btFixedConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference);
-
-			btAssert(btFabs(wrapped_twist_limit[0]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_twist_limit[1]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_plane_limit[0]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_plane_limit[1]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_normal_limit[0]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_normal_limit[1]) < INTERNAL_ZERO_THRESHOLD);
-
-			this->m_constraint = constraint;
-		}
-		break;
-		case BRX_PHYSICS_CONSTRAINT_BALL_AND_SOCKET:
-		{
-			btAssert(BRX_PHYSICS_CONSTRAINT_BALL_AND_SOCKET == wrapped_constraint_type);
-
-			btPoint2PointConstraint *constraint = new btPoint2PointConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached.getOrigin(), frame_reference.getOrigin());
-
-			btAssert(btFabs(wrapped_twist_limit[0]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_twist_limit[1]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_plane_limit[0]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_plane_limit[1]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_normal_limit[0]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_normal_limit[1]) < INTERNAL_ZERO_THRESHOLD);
-
-			this->m_constraint = constraint;
-		}
-		break;
-		case BRX_PHYSICS_CONSTRAINT_HINGE:
-		{
-			btAssert(BRX_PHYSICS_CONSTRAINT_HINGE == wrapped_constraint_type);
-
-			btHingeConstraint *constraint = new btHingeConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference, false);
-
-			btAssert(btFabs(wrapped_twist_limit[0]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_twist_limit[1]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_plane_limit[0]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_plane_limit[1]) < INTERNAL_ZERO_THRESHOLD);
-
-			btAssert(wrapped_normal_limit[0] <= wrapped_normal_limit[1]);
-			btAssert(wrapped_normal_limit[0] >= (SIMD_PI * -1.0F));
-			btAssert(wrapped_normal_limit[0] <= (SIMD_PI * 1.0F));
-			btAssert(wrapped_normal_limit[1] >= (SIMD_PI * -1.0F));
-			btAssert(wrapped_normal_limit[1] <= (SIMD_PI * 1.0F));
-			constraint->setLimit(btMin(btMax((SIMD_PI * -1.0F), btMin(wrapped_normal_limit[0], wrapped_normal_limit[1])), (SIMD_PI * 1.0F)), btMin(btMax((SIMD_PI * -1.0F), btMax(wrapped_normal_limit[0], wrapped_normal_limit[1])), (SIMD_PI * 1.0F)));
-
-			this->m_constraint = constraint;
-		}
-		break;
-		case BRX_PHYSICS_CONSTRAINT_PRISMATIC:
-		{
-			btAssert(BRX_PHYSICS_CONSTRAINT_PRISMATIC == wrapped_constraint_type);
-
-			btSliderConstraint *constraint = new btSliderConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference, false);
-
-			btAssert(btFabs(wrapped_plane_limit[0]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_plane_limit[1]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_normal_limit[0]) < INTERNAL_ZERO_THRESHOLD);
-			btAssert(btFabs(wrapped_normal_limit[1]) < INTERNAL_ZERO_THRESHOLD);
-
-			btAssert(wrapped_twist_limit[0] <= wrapped_twist_limit[1]);
-			constraint->setLowerLinLimit(btMin(wrapped_twist_limit[0], wrapped_twist_limit[1]));
-			constraint->setUpperLinLimit(btMax(wrapped_twist_limit[0], wrapped_twist_limit[1]));
-			constraint->setLowerAngLimit(0.0F);
-			constraint->setUpperAngLimit(0.0F);
-
-			this->m_constraint = constraint;
-		}
-		break;
-		default:
-		{
-			btAssert(BRX_PHYSICS_CONSTRAINT_RAGDOLL == wrapped_constraint_type);
-
-			btAssert(wrapped_twist_limit[0] <= wrapped_twist_limit[1]);
-			btAssert(wrapped_twist_limit[0] >= (SIMD_PI * -1.0F));
-			btAssert(wrapped_twist_limit[0] <= (SIMD_PI * 1.0F));
-			btAssert(wrapped_twist_limit[1] >= (SIMD_PI * -1.0F));
-			btAssert(wrapped_twist_limit[1] <= (SIMD_PI * 1.0F));
-			btScalar const twist_span = btMin(btMax(btFabs(wrapped_twist_limit[0]), btFabs(wrapped_twist_limit[1])), (SIMD_PI * 1.0F));
-
-			// TODO: do we really should allow equal?
-			btAssert(wrapped_plane_limit[0] <= wrapped_plane_limit[1]);
-			btAssert(wrapped_plane_limit[0] >= (SIMD_PI * -0.5F));
-			btAssert(wrapped_plane_limit[0] <= (SIMD_PI * 0.5F));
-			btAssert(wrapped_plane_limit[1] >= (SIMD_PI * -0.5F));
-			btAssert(wrapped_plane_limit[1] <= (SIMD_PI * 0.5F));
-			btScalar const swing_span2 = btMin(btMax(btFabs(wrapped_plane_limit[0]), btFabs(wrapped_plane_limit[1])), (SIMD_PI * 0.5F));
-
-			// TODO: do we really should allow equal?
-			btAssert(wrapped_normal_limit[0] <= wrapped_normal_limit[1]);
-			btAssert(wrapped_normal_limit[0] >= (SIMD_PI * -0.5F));
-			btAssert(wrapped_normal_limit[0] <= (SIMD_PI * 0.5F));
-			btAssert(wrapped_normal_limit[1] >= (SIMD_PI * -0.5F));
-			btAssert(wrapped_normal_limit[1] <= (SIMD_PI * 0.5F));
-			btScalar const swing_span1 = btMin(btMax(btFabs(wrapped_normal_limit[0]), btFabs(wrapped_normal_limit[1])), (SIMD_PI * 0.5F));
-
-			btAssert(twist_span <= swing_span1);
-			btAssert(twist_span <= swing_span2);
-
-			btConeTwistConstraint *constraint = new btConeTwistConstraint(*rigid_body_attached, *rigid_body_reference, frame_attached, frame_reference);
-			constraint->setLimit(swing_span1, swing_span2, twist_span);
-
-			this->m_constraint = constraint;
-		}
-		}
+		constraint->enableSpring(3, true);
+		constraint->setStiffness(3, rotation_x_spring);
 	}
+	else
+	{
+		btAssert(0.0F == rotation_x_spring);
+	}
+
+	btAssert(0.0F <= wrapped_rotation_spring[1]);
+	btScalar const rotation_y_spring = btMax(0.0F, wrapped_rotation_spring[1]);
+
+	if (rotation_y_spring > INTERNAL_ZERO_THRESHOLD)
+	{
+		constraint->enableSpring(4, true);
+		constraint->setStiffness(4, rotation_y_spring);
+	}
+	else
+	{
+		btAssert(0.0F == rotation_y_spring);
+	}
+
+	btAssert(0.0F <= wrapped_rotation_spring[2]);
+	btScalar const rotation_z_spring = btMax(0.0F, wrapped_rotation_spring[2]);
+
+	if (rotation_z_spring > INTERNAL_ZERO_THRESHOLD)
+	{
+		constraint->enableSpring(5, true);
+		constraint->setStiffness(5, rotation_z_spring);
+	}
+	else
+	{
+		btAssert(0.0F == rotation_z_spring);
+	}
+
+	btAssert(0.0F <= wrapped_translation_spring[0]);
+	btScalar const translation_x_spring = btMax(0.0F, wrapped_translation_spring[0]);
+
+	if (translation_x_spring > INTERNAL_ZERO_THRESHOLD)
+	{
+		constraint->enableSpring(0, true);
+		constraint->setStiffness(0, translation_x_spring);
+	}
+	else
+	{
+		btAssert(0.0F == translation_x_spring);
+	}
+
+	btAssert(0.0F <= wrapped_translation_spring[1]);
+	btScalar const translation_y_spring = btMax(0.0F, wrapped_translation_spring[1]);
+
+	if (translation_y_spring > INTERNAL_ZERO_THRESHOLD)
+	{
+		constraint->enableSpring(1, true);
+		constraint->setStiffness(1, translation_y_spring);
+	}
+	else
+	{
+		btAssert(0.0F == translation_y_spring);
+	}
+
+	btAssert(0.0F <= wrapped_translation_spring[2]);
+	btScalar const translation_z_spring = btMax(0.0F, wrapped_translation_spring[2]);
+
+	if (translation_z_spring > INTERNAL_ZERO_THRESHOLD)
+	{
+		constraint->enableSpring(2, true);
+		constraint->setStiffness(2, translation_z_spring);
+	}
+	else
+	{
+		btAssert(0.0F == translation_z_spring);
+	}
+
+	btAssert(NULL == this->m_constraint);
+	this->m_constraint = constraint;
 }
 
 inline void brx_physics_constraint::uninit()

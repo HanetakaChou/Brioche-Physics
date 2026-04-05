@@ -354,8 +354,6 @@ inline void brx_physics_world::uninit()
 
 inline void brx_physics_world::physics_world_add_body(btRigidBody *rigid_body, int collision_filter_group, int collision_filter_mask)
 {
-	rigid_body->getGravity();
-
 	this->m_dynamics_world->addRigidBody(rigid_body, collision_filter_group, collision_filter_mask);
 }
 
@@ -616,7 +614,7 @@ inline void brx_physics_rigid_body::apply_key_frame(float const world_local_time
 	// btKinematicCharacterController::stepUp
 
 	// btDiscreteDynamicsWorld::stepSimulation
-	float timp_step;
+	float time_step;
 	{
 		float const fixed_time_step = substep_delta_time;
 		int const max_sub_steps = max_substep_count;
@@ -640,16 +638,16 @@ inline void brx_physics_rigid_body::apply_key_frame(float const world_local_time
 			btAssert(num_simulation_sub_steps <= max_sub_steps);
 			int clamped_simulation_steps = (num_simulation_sub_steps < max_sub_steps) ? num_simulation_sub_steps : max_sub_steps;
 
-			timp_step = fixed_time_step * clamped_simulation_steps;
+			time_step = fixed_time_step * clamped_simulation_steps;
 		}
 		else
 		{
-			timp_step = -1.0F;
+			time_step = -1.0F;
 		}
 	}
 
 	// btRigidBody::saveKinematicState
-	if (timp_step > 0.0F)
+	if (time_step > 0.0F)
 	{
 		btAssert(btFabs(btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).length() - 1.0F) < INTERNAL_ZERO_THRESHOLD);
 		btQuaternion const target_rotation = btQuaternion(wrapped_rotation[0], wrapped_rotation[1], wrapped_rotation[2], wrapped_rotation[3]).normalized();
@@ -660,7 +658,7 @@ inline void brx_physics_rigid_body::apply_key_frame(float const world_local_time
 
 		btVector3 linear_velocity;
 		btVector3 angular_velocity;
-		btTransformUtil::calculateVelocity(current_transform, target_transform, timp_step, linear_velocity, angular_velocity);
+		btTransformUtil::calculateVelocity(current_transform, target_transform, time_step, linear_velocity, angular_velocity);
 
 		this->m_rigid_body->clearForces();
 		this->m_rigid_body->setAngularVelocity(angular_velocity);
@@ -907,48 +905,58 @@ int brx_physics_context::getCurrentThreadIndex() const
 
 void brx_physics_context::parallelFor(int begin, int end, int grain_size, btIParallelForBody const &body)
 {
-	if ((begin >= 0) && (end > begin) && (grain_size > 0))
+	if ((begin >= 0) && (end >= begin) && (grain_size > 0))
 	{
-		mcrt_parallel_map(
-			begin,
-			end,
-			grain_size,
-			[](uint32_t begin, uint32_t end, void *user_data) -> void
-			{
-				btIParallelForBody const *const body = static_cast<btIParallelForBody *>(user_data);
-				body->forLoop(begin, end);
-			},
-			const_cast<btIParallelForBody *>(&body));
+		if ((end - begin) > grain_size)
+		{
+			mcrt_parallel_map(
+				begin,
+				end,
+				grain_size,
+				[](uint32_t begin, uint32_t end, void *user_data) -> void
+				{
+					btIParallelForBody const *const body = static_cast<btIParallelForBody *>(user_data);
+					body->forLoop(begin, end);
+				},
+				const_cast<btIParallelForBody *>(&body));
+		}
+		else
+		{
+			body.forLoop(begin, end);
+		}
 	}
 	else
 	{
-		btAssert(begin >= 0);
-		btAssert(grain_size > 0);
-
+		btAssert(false);
 		body.forLoop(begin, end);
 	}
 }
 
 btScalar brx_physics_context::parallelSum(int begin, int end, int grain_size, btIParallelSumBody const &body)
 {
-	if ((begin >= 0) && (end > begin) && (grain_size > 0))
+	if ((begin >= 0) && (end >= begin) && (grain_size > 0))
 	{
-		return mcrt_parallel_reduce_float(
-			begin,
-			end,
-			grain_size,
-			[](uint32_t begin, uint32_t end, void *user_data) -> float
-			{
-				btIParallelSumBody const *const body = static_cast<btIParallelSumBody *>(user_data);
-				return body->sumLoop(begin, end);
-			},
-			const_cast<btIParallelSumBody *>(&body));
+		if ((end - begin) > grain_size)
+		{
+			return mcrt_parallel_reduce_float(
+				begin,
+				end,
+				grain_size,
+				[](uint32_t begin, uint32_t end, void *user_data) -> float
+				{
+					btIParallelSumBody const *const body = static_cast<btIParallelSumBody *>(user_data);
+					return body->sumLoop(begin, end);
+				},
+				const_cast<btIParallelSumBody *>(&body));
+		}
+		else
+		{
+			return body.sumLoop(begin, end);
+		}
 	}
 	else
 	{
-		btAssert(begin >= 0);
-		btAssert(grain_size > 0);
-
+		btAssert(false);
 		return body.sumLoop(begin, end);
 	}
 }
